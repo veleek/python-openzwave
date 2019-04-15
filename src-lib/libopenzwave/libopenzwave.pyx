@@ -463,77 +463,63 @@ cdef addValueId(ValueID v, n):
     #check is a valid value
     if v.GetInstance() == 0:
         return
-    logger.debug("addValueId : GetCommandClassId : %s, GetType : %s", v.GetCommandClassId(), v.GetType())
     cdef Manager *manager = GetManager()
     item = new pair[uint64_t, ValueID](v.GetId(), v)
     values_map.insert(deref(item))
     del item
+    n['valueId'] = valueIdInfo = {'homeId' : v.GetHomeId(),
+                                  'nodeId' : v.GetNodeId(),
+                                  'commandClass' : PyManager.COMMAND_CLASS_DESC[v.GetCommandClassId()],
+                                  'instance' : v.GetInstance(),
+                                  'index' : v.GetIndex(),
+                                  'id' : v.GetId(),
+                                  'genre' : '',
+                                  'type' : PyValueTypes[v.GetType()],
+                                  'value' : None,
+                                  'label' : None,
+                                  'units' : None,
+                                  'readOnly': False,
+                                 }
+    #include value details for non basic value
     genre = PyGenres[v.GetGenre()]
-    #handle basic value in different way
-    if genre =="Basic":
-        n['valueId'] = {'homeId' : v.GetHomeId(),
-                    'nodeId' : v.GetNodeId(),
-                    'commandClass' : PyManager.COMMAND_CLASS_DESC[v.GetCommandClassId()],
-                    'instance' : v.GetInstance(),
-                    'index' : v.GetIndex(),
-                    'id' : v.GetId(),
-                    'genre' : '',
-                    'type' : PyValueTypes[v.GetType()],
-                    'value' : None,
-                    'label' : None,
-                    'units' : None,
-                    'readOnly': False,
-                    }
-    else:
-        n['valueId'] = {'homeId' : v.GetHomeId(),
-                        'nodeId' : v.GetNodeId(),
-                        'commandClass' : PyManager.COMMAND_CLASS_DESC[v.GetCommandClassId()],
-                        'instance' : v.GetInstance(),
-                        'index' : v.GetIndex(),
-                        'id' : v.GetId(),
-                        'genre' : genre,
-                        'type' : PyValueTypes[v.GetType()],
-                        'value' : getValueFromType(manager,v.GetId()),
-                        'label' : manager.GetValueLabel(v).c_str(),
-                        'units' : manager.GetValueUnits(v).c_str(),
-                        'readOnly': manager.IsValueReadOnly(v),
-                        }
-    logger.debug("addValueId : Notification : %s", n)
+    if genre != "Basic":
+        valueIdInfo.update({'genre' : genre,
+                            'value' : getValueFromType(manager,v.GetId()),
+                            'label' : manager.GetValueLabel(v).c_str(),
+                            'units' : manager.GetValueUnits(v).c_str(),
+                            'readOnly' : manager.IsValueReadOnly(v)
+                           })
+    logger.debug("addValueId : %s", valueIdInfo)
 
 cdef void notif_callback(const_notification _notification, void* _context) with gil:
     """
     Notification callback to the C++ library
 
     """
-    logger.debug("notif_callback : new notification")
-    cdef Notification* notification = <Notification*>_notification
-    logger.debug("notif_callback : Notification type : %s, nodeId : %s", notification.GetType(), notification.GetNodeId())
+    cdef Notification* notification
+    cdef NotificationType notificationType
     try:
-        n = {'notificationType' : PyNotifications[notification.GetType()],
+        notification = <Notification*>_notification
+        notificationType = notification.GetType()
+        notificationTypeName = PyNotifications[notificationType]
+        logger.debug("notif_callback new notification. type : %s %s, nodeId : %s", notificationType, notificationTypeName, notification.GetNodeId())
+
+        n = {'notificationType' : notificationTypeName,
              'homeId' : notification.GetHomeId(),
              'nodeId' : notification.GetNodeId(),
             }
     except:
-        logger.exception("notif_callback exception")
-    if notification.GetType() == Type_Group:
-        try:
+        logger.exception("notif_callback new exception")
+        raise
+    
+    try:
+        if notificationType == Type_Group:
             n['groupIdx'] = notification.GetGroupIdx()
-        except:
-            logger.exception("notif_callback exception Type_Group")
-    elif notification.GetType() == Type_NodeEvent:
-        try:
+        elif notificationType == Type_NodeEvent:
             n['event'] = notification.GetEvent()
-        except:
-            logger.exception("notif_callback exception Type_NodeEvent")
-            raise
-    elif notification.GetType() == Type_Notification:
-        try:
+        elif notificationType == Type_Notification:
             n['notificationCode'] = notification.GetNotification()
-        except:
-            logger.exception("notif_callback exception Type_Notification")
-            raise
-    elif notification.GetType() == Type_ControllerCommand:
-        try:
+        elif notificationType == Type_ControllerCommand:
             state = notification.GetEvent()
             n['controllerStateInt'] = state
             n['controllerState'] = PyControllerState[state]
@@ -543,53 +529,25 @@ cdef void notif_callback(const_notification _notification, void* _context) with 
             n['controllerErrorInt'] = error
             n['controllerError'] = PyControllerError[error]
             n['controllerErrorDoc'] = PyControllerError[error].doc
-        except:
-            logger.exception("notif_callback exception Type_ControllerCommand")
-            raise
-    elif notification.GetType() in (Type_CreateButton, Type_DeleteButton, Type_ButtonOn, Type_ButtonOff):
-        try:
+        elif notificationType in (Type_CreateButton, Type_DeleteButton, Type_ButtonOn, Type_ButtonOff):
             n['buttonId'] = notification.GetButtonId()
-        except:
-            logger.exception("notif_callback exception Type_CreateButton, Type_DeleteButton, Type_ButtonOn, Type_ButtonOff")
-            raise
-    elif notification.GetType() == Type_DriverRemoved:
-        try:
-            logger.debug("Notification : Type_DriverRemoved received : clean all valueids")
+        elif notificationType in (Type_DriverRemoved, Type_DriverReset):
             values_map.empty()
-        except:
-            logger.exception("notif_callback exception Type_DriverRemoved")
-            raise
-    elif notification.GetType() == Type_DriverReset:
-        try:
-            logger.debug("Notification : Type_DriverReset received : clean all valueids")
-            values_map.empty()
-        except:
-            logger.exception("notif_callback exception Type_DriverReset")
-            raise
-    elif notification.GetType() == Type_SceneEvent:
-        try:
+        elif notificationType == Type_SceneEvent:
             n['sceneId'] = notification.GetSceneId()
-        except:
-            logger.exception("notif_callback exception Type_SceneEvent")
-            raise
-    elif notification.GetType() in (Type_ValueAdded, Type_ValueChanged, Type_ValueRefreshed):
-        try:
+        elif notificationType in (Type_ValueAdded, Type_ValueChanged, Type_ValueRefreshed):
             addValueId(notification.GetValueID(), n)
-        except:
-            logger.exception("notif_callback exception Type_ValueAdded, Type_ValueChanged, Type_ValueRefreshed")
-            raise
-    elif notification.GetType() == Type_ValueRemoved:
-        try:
+        elif notificationType == Type_ValueRemoved:
             n['valueId'] = {'id' : notification.GetValueID().GetId()}
-        except:
-            logger.exception("notif_callback exception Type_ValueRemoved")
-            raise
-    #elif notification.GetType() in (Type_PollingEnabled, Type_PollingDisabled):
-    #    #Maybe we should enable/disable this
-    #    addValueId(notification.GetValueID(), n)
+        #elif notificationType in (Type_PollingEnabled, Type_PollingDisabled):
+        #    #Maybe we should enable/disable this
+        #    addValueId(notification.GetValueID(), n)
+    except:
+        logger.exception("notif_callback exception Type_%s", notificationTypeName)
+        raise
     logger.debug("notif_callback : call callback context")
     (<object>_context)(n)
-    if notification.GetType() == Type_ValueRemoved:
+    if notificationType == Type_ValueRemoved:
         try:
             delValueId(notification.GetValueID(), n)
         except:
